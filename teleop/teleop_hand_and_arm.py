@@ -27,7 +27,6 @@ from teleop.robot_control.robot_hand_brainco import Brainco_Controller
 from teleop.image_server.image_client import ImageClient
 from teleop.utils.episode_writer import EpisodeWriter
 from sshkeyboard import listen_keyboard, stop_listening
-from teleop.utils.third_camera import _third_camera
 
 # for simulation
 from unitree_sdk2py.core.channel import ChannelPublisher
@@ -88,8 +87,6 @@ if __name__ == '__main__':
     parser.add_argument('--carpet_headless', action='store_true', help='Enable headless mode for carpet tactile sensor data collection')
     parser.add_argument('--carpet_tty', type=str, default='/dev/tty.usbserial-02857AC6', help='Set the TTY port for carpet tactile sensors (default: /dev/tty.usbserial-02857AC6)')
     parser.add_argument('--third_camera', action='store_true', help='Enable third camera (RealSense color via UVC)')
-    parser.add_argument('--third_camera_device', type=str, default='/dev/video4', help='Device path for third camera (default: /dev/video4)')
-    parser.add_argument('--third_camera_fps', type=int, default=30, help='Third camera fps (default: 30)')
 
     args = parser.parse_args()
     logger_mp.info(f"args: {args}")
@@ -119,7 +116,7 @@ if __name__ == '__main__':
             #'wrist_camera_id_numbers': [2, 4],
             'third_camera_type': 'opencv',
             'third_camera_image_shape': [480, 640],  # Third camera resolution
-            'third_camera_id_numbers': [6],
+            'third_camera_id_numbers': [6], # TODO: change the camera id
         }
 
     # carpet tactile sensors
@@ -137,7 +134,6 @@ if __name__ == '__main__':
         base_images = np.array(base_images)
         base_image = np.mean(base_images, axis=0)
         logger_mp.info("Carpet tactile sensors calibration done!")
-
 
         def get_tactile_data():
             total_image = carpet_sensor.get()
@@ -183,19 +179,12 @@ if __name__ == '__main__':
     else:
         img_client = ImageClient(tv_img_shape=tv_img_shape, tv_img_shm_name=tv_img_shm.name)
 
-    if THIRD:
+    if THIRD and not args.sim:
         third_img_shape = (img_config['third_camera_image_shape'][0], img_config['third_camera_image_shape'][1], 3)
         third_img_shm = shared_memory.SharedMemory(create=True, size=np.prod(third_img_shape) * np.uint8().itemsize)
         third_img_array = np.ndarray(third_img_shape, dtype=np.uint8, buffer=third_img_shm.buf)
-        third_stop_event = threading.Event()
-        third_stop_event.clear()
-        third_camera_thread = threading.Thread(
-            target=_third_camera,
-            args=(args.third_camera_device, third_img_shape, third_img_array, args.third_camera_fps, third_stop_event, logger_mp),
-            daemon=True
-        )
-        third_camera_thread.start()
-        logger_mp.info("third camera thred is starting")
+        img_client = ImageClient(tv_img_shape=tv_img_shape, tv_img_shm_name=tv_img_shm.name,
+                                 third_img_shape=third_img_shape, third_img_shm_name=third_img_shm.name)
 
     image_receive_thread = threading.Thread(target=img_client.receive_process, daemon=True)
     image_receive_thread.daemon = True
@@ -290,9 +279,9 @@ if __name__ == '__main__':
             if not args.headless:
                 tv_resized_image = cv2.resize(tv_img_array, (tv_img_shape[1] // 2, tv_img_shape[0] // 2))
                 cv2.imshow("record image", tv_resized_image)
-                if THIRD:
-                    third_resized = cv2.resize(third_img_array, (third_img_shape[1] // 2, third_img_shape[0] // 2))
-                    cv2.imshow("third camera", third_resized)
+                #if THIRD:
+                #    third_resized = cv2.resize(third_img_array, (third_img_shape[1] // 2, third_img_shape[0] // 2))
+                #    cv2.imshow("third camera", third_resized)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     running = False
@@ -433,10 +422,8 @@ if __name__ == '__main__':
                         if WRIST:
                             colors[f"color_{1}"] = current_wrist_image[:, :wrist_img_shape[1] // 2]
                             colors[f"color_{2}"] = current_wrist_image[:, wrist_img_shape[1] // 2:]
-                    if THIRD:
-                        third_images[f"third_{0}"] = current_third_image
-                    else:
-                        third_image = None
+                        if THIRD:
+                            colors[f"color_{3}"] = current_third_image[:, third_img_shape[1] // 2:]
                     
                     states = {
                         "left_arm": {
@@ -500,17 +487,16 @@ if __name__ == '__main__':
                             tactile_render = cv2.resize(tactile_render.astype(np.uint8), (500, 500))
                             cv2.imshow("carpet_0", tactile_render)
                             cv2.waitKey(1)
-
                     else:
                         carpet_tactiles = None
 
                     if args.sim:
                         sim_state = sim_state_subscriber.read_data()
                         recorder.add_item(colors=colors, depths=depths, states=states, actions=actions,
-                                          carpet_tactiles=carpet_tactiles, sim_state=sim_state, third_images=third_images)
+                                          carpet_tactiles=carpet_tactiles, sim_state=sim_state)
                     else:
                         recorder.add_item(colors=colors, depths=depths, states=states, actions=actions,
-                                          carpet_tactiles=carpet_tactiles, third_images=third_images)
+                                          carpet_tactiles=carpet_tactiles)
 
             current_time = time.time()
             time_elapsed = current_time - start_time

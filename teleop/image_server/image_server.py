@@ -146,6 +146,10 @@ class ImageServer:
         self.wrist_image_shape = config.get('wrist_camera_image_shape', [480, 640])    # (height, width)
         self.wrist_camera_id_numbers = config.get('wrist_camera_id_numbers', None)
 
+        self.third_camera_type = config.get('third_camera_type', None)
+        self.third_image_shape = config.get('third_camera_image_shape', [480, 640])    # (height, width)
+        self.third_camera_id_numbers = config.get('third_camera_id_numbers', None)
+
         self.port = port
         self.Unit_Test = Unit_Test
 
@@ -177,6 +181,20 @@ class ImageServer:
             else:
                 print(f"[Image Server] Unsupported wrist_camera_type: {self.wrist_camera_type}")
 
+        # Initialize third cameras if provided
+        self.third_cameras = []
+        if self.third_camera_type and self.third_camera_id_numbers:
+            if self.third_camera_type == 'opencv':
+                for device_id in self.third_camera_id_numbers:
+                    camera = OpenCVCamera(device_id=device_id, img_shape=self.third_image_shape, fps=self.fps)
+                    self.third_cameras.append(camera)
+            elif self.third_camera_type == 'realsense':
+                for serial_number in self.third_camera_id_numbers:
+                    camera = RealSenseCamera(img_shape=self.third_image_shape, fps=self.fps, serial_number=serial_number)
+                    self.third_cameras.append(camera)
+            else:
+                print(f"[Image Server] Unsupported third_camera_type: {self.third_camera_type}")
+
         # Set ZeroMQ context and socket
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.PUB)
@@ -200,6 +218,14 @@ class ImageServer:
                 print(f"[Image Server] Wrist camera {cam.serial_number} resolution: {cam.img_shape[0]} x {cam.img_shape[1]}")
             else:
                 print("[Image Server] Unknown camera type in wrist_cameras.")
+
+        for cam in self.third_cameras:
+            if isinstance(cam, OpenCVCamera):
+                print(f"[Image Server] Third camera {cam.id} resolution: {cam.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)} x {cam.cap.get(cv2.CAP_PROP_FRAME_WIDTH)}")
+            elif isinstance(cam, RealSenseCamera):
+                print(f"[Image Server] Third camera {cam.serial_number} resolution: {cam.img_shape[0]} x {cam.img_shape[1]}")
+            else:
+                print("[Image Server] Unknown camera type in third_cameras.")
 
         print("[Image Server] Image server has started, waiting for client connections...")
 
@@ -231,6 +257,8 @@ class ImageServer:
             cam.release()
         for cam in self.wrist_cameras:
             cam.release()
+        for cam in self.third_cameras:
+            cam.release()
         self.socket.close()
         self.context.term()
         print("[Image Server] The server has been closed.")
@@ -246,7 +274,7 @@ class ImageServer:
                             print("[Image Server] Head camera frame read is error.")
                             break
                     elif self.head_camera_type == 'realsense':
-                        color_image, depth_iamge = cam.get_frame()
+                        color_image, depth_image = cam.get_frame()
                         if color_image is None:
                             print("[Image Server] Head camera frame read is error.")
                             break
@@ -254,7 +282,7 @@ class ImageServer:
                 if len(head_frames) != len(self.head_cameras):
                     break
                 head_color = cv2.hconcat(head_frames)
-                
+
                 if self.wrist_cameras:
                     wrist_frames = []
                     for cam in self.wrist_cameras:
@@ -264,7 +292,7 @@ class ImageServer:
                                 print("[Image Server] Wrist camera frame read is error.")
                                 break
                         elif self.wrist_camera_type == 'realsense':
-                            color_image, depth_iamge = cam.get_frame()
+                            color_image, depth_image = cam.get_frame()
                             if color_image is None:
                                 print("[Image Server] Wrist camera frame read is error.")
                                 break
@@ -275,7 +303,28 @@ class ImageServer:
                     full_color = cv2.hconcat([head_color, wrist_color])
                 else:
                     full_color = head_color
+                
+                if self.third_cameras:
+                    third_frames = []
+                    for cam in self.third_cameras:
+                        if self.third_camera_type == 'opencv':
+                            color_image = cam.get_frame()
+                            if color_image is None:
+                                print("[Image Server] Third camera frame read is error.")
+                                break
+                        elif self.third_camera_type == 'realsense':
+                            color_image, depth_image = cam.get_frame()
+                            if color_image is None:
+                                print("[Image Server] Third camera frame read is error.")
+                                break
+                        third_frames.append(color_image)
+                    third_color = cv2.hconcat(third_frames)
 
+                    # Concatenate head and third frames
+                    full_color = cv2.hconcat([head_color, third_color])
+                else:
+                    full_color = head_color
+                
                 ret, buffer = cv2.imencode('.jpg', full_color)
                 if not ret:
                     print("[Image Server] Frame imencode is failed.")
@@ -307,12 +356,16 @@ class ImageServer:
 if __name__ == "__main__":
     config = {
         'fps': 30,
-        'head_camera_type': 'opencv',
+        'head_camera_type': 'realsense',
         'head_camera_image_shape': [480, 848],  # Head camera resolution
         'head_camera_id_numbers': ['339222071291'],
         #'wrist_camera_type': 'opencv',
         #'wrist_camera_image_shape': [480, 640],  # Wrist camera resolution
         #'wrist_camera_id_numbers': [2, 4],
+        'third_camera_type': 'realsense',
+        'third_camera_image_shape': [480, 640],  # Third camera resolution
+        'third_camera_id_numbers': [6], # TODO: change the id number
+
     }
 
     server = ImageServer(config, Unit_Test=False)
