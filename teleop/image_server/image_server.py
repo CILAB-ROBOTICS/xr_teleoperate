@@ -139,15 +139,15 @@ class ImageServer:
         print(config)
         self.fps = config.get('fps', 30)
         self.head_camera_type = config.get('head_camera_type', 'opencv')
-        self.head_image_shape = config.get('head_camera_image_shape', [480, 640])      # (height, width)
+        self.head_image_shape = config.get('head_camera_image_shape', [480, 848])      # (height, width)
         self.head_camera_id_numbers = config.get('head_camera_id_numbers', [0])
 
         self.wrist_camera_type = config.get('wrist_camera_type', None)
-        self.wrist_image_shape = config.get('wrist_camera_image_shape', [480, 640])    # (height, width)
+        self.wrist_image_shape = config.get('wrist_camera_image_shape', [480, 848])    # (height, width)
         self.wrist_camera_id_numbers = config.get('wrist_camera_id_numbers', None)
 
         self.third_camera_type = config.get('third_camera_type', None)
-        self.third_image_shape = config.get('third_camera_image_shape', [480, 640])    # (height, width)
+        self.third_image_shape = config.get('third_camera_image_shape', [480, 848])    # (height, width)
         self.third_camera_id_numbers = config.get('third_camera_id_numbers', None)
 
         self.port = port
@@ -364,7 +364,7 @@ if __name__ == "__main__":
         #'wrist_camera_id_numbers': [2, 4],
         'third_camera_type': 'realsense',
         'third_camera_image_shape': [480, 640],  # Third camera resolution
-        'third_camera_id_numbers': [6], # TODO: change the id number
+        'third_camera_id_numbers': ['239622301900'], # TODO: change the id number
 
     }
 
