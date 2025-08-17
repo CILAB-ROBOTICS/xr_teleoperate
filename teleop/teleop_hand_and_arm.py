@@ -6,7 +6,7 @@ from multiprocessing import shared_memory, Value, Array, Lock
 import threading
 import logging_mp
 
-from teleop.carpet_tactile.sensors.sensors import MultiSensors
+from carpet_tactile.sensors.sensors import MultiSensors
 
 logging_mp.basic_config(level=logging_mp.INFO)
 logger_mp = logging_mp.get_logger(__name__)
@@ -116,7 +116,7 @@ if __name__ == '__main__':
             #'wrist_camera_id_numbers': [2, 4],
             'third_camera_type': 'opencv',
             'third_camera_image_shape': [480, 640],  # Third camera resolution
-            'third_camera_id_numbers': [6], # TODO: change the camera id
+            'third_camera_id_numbers': ['39622301900'], # TODO: change the camera id
         }
 
     # carpet tactile sensors
@@ -234,7 +234,7 @@ if __name__ == '__main__':
         dual_hand_state_array = Array('d', 12, lock=False)  # [output] current left, right hand state(12) data.
         dual_hand_action_array = Array('d', 12, lock=False)  # [output] current left, right hand action(12) data.
         hand_ctrl = Inspire_Controller(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock,
-                                       dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
+                                       dual_hand_state_array, dual_hand_action_array)
     elif args.ee == "brainco":
         left_hand_pos_array = Array('d', 75, lock=True)  # [input]
         right_hand_pos_array = Array('d', 75, lock=True)  # [input]
@@ -410,7 +410,6 @@ if __name__ == '__main__':
                 if is_recording:
                     colors = {}
                     depths = {}
-                    third_images = {}
                     if BINOCULAR:
                         colors[f"color_{0}"] = current_tv_image[:, :tv_img_shape[1] // 2]
                         colors[f"color_{1}"] = current_tv_image[:, tv_img_shape[1] // 2:]
