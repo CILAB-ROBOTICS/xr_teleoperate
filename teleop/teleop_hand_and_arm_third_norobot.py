@@ -86,9 +86,6 @@ if __name__ == '__main__':
     parser.add_argument('--carpet_sensitivity', type=int, default=250, help='Set carpet tactile sensor sensitivity (default: 1.0)')
     parser.add_argument('--carpet_headless', action='store_true', help='Enable headless mode for carpet tactile sensor data collection')
     parser.add_argument('--carpet_tty', type=str, default='/dev/tty.usbserial-02857AC6', help='Set the TTY port for carpet tactile sensors (default: /dev/tty.usbserial-02857AC6)')
-    parser.add_argument('--third_camera', action='store_true', help='Enable third camera (RealSense color via UVC)')
-    parser.add_argument('--third_camera_device', type=str, default='/dev/video4', help='Device path for third camera (default: /dev/video4)')
-    parser.add_argument('--third_camera_fps', type=int, default=30, help='Third camera fps (default: 30)')
 
     args = parser.parse_args()
     logger_mp.info(f"args: {args}")
@@ -113,9 +110,6 @@ if __name__ == '__main__':
             'wrist_camera_type': 'opencv',
             'wrist_camera_image_shape': [480, 640],  # Wrist camera resolution
             'wrist_camera_id_numbers': [2, 4],
-            'third_camera_type': 'opencv',
-            'third_camera_image_shape': [480, 640],  # Third camera resolution
-            'third_camera_id_numbers': [5], # TODO: change the camera id
         }
 
     base_images = list()
@@ -149,8 +143,6 @@ if __name__ == '__main__':
     else:
         WRIST = False
 
-    THIRD = bool(args.third_camera)
-
     if BINOCULAR and not (img_config['head_camera_image_shape'][1] / img_config['head_camera_image_shape'][0] > ASPECT_RATIO_THRESHOLD):
         tv_img_shape = (img_config['head_camera_image_shape'][0], img_config['head_camera_image_shape'][1] * 2, 3)
     else:
@@ -173,20 +165,6 @@ if __name__ == '__main__':
                                  wrist_img_shape=wrist_img_shape, wrist_img_shm_name=wrist_img_shm.name)
     else:
         img_client = ImageClient(tv_img_shape=tv_img_shape, tv_img_shm_name=tv_img_shm.name)
-
-    if THIRD:
-        third_img_shape = (img_config['third_camera_image_shape'][0], img_config['third_camera_image_shape'][1], 3)
-        third_img_shm = shared_memory.SharedMemory(create=True, size=np.prod(third_img_shape) * np.uint8().itemsize)
-        third_img_array = np.ndarray(third_img_shape, dtype=np.uint8, buffer=third_img_shm.buf)
-        third_stop_event = threading.Event()
-        third_stop_event.clear()
-        third_camera_thread = threading.Thread(
-            target=_third_camera,
-            args=(args.third_camera_device, third_img_shape, third_img_array, args.third_camera_fps, third_stop_event, logger_mp),
-            daemon=True
-        )
-        third_camera_thread.start()
-        logger_mp.info("third camera thred is starting")
 
     image_receive_thread = threading.Thread(target=img_client.receive_process, daemon=True)
     image_receive_thread.daemon = True
@@ -266,22 +244,20 @@ if __name__ == '__main__':
         recorder = EpisodeWriter(task_dir=args.task_dir, frequency=args.frequency, rerun_log=True)
 
     flag = False
-    #logger_mp.info("THIRD",THIRD)
+    logger_mp.info("False")
     #logger_mp.info("args.headless", args.headless)
     try:
+        logger_mp.info("Please enter the start signal (enter 'r' to start the subsequent program)")
         logger_mp.info("Please enter the start signal (enter 'r' to start the subsequent program)")
         #while not start_signal:
         #    time.sleep(0.01)
         #arm_ctrl.speed_gradual_max()
         while running:
             start_time = time.time()
-
+            logger_mp.info(start_time)
             if not args.headless:
                 tv_resized_image = cv2.resize(tv_img_array, (tv_img_shape[1] // 2, tv_img_shape[0] // 2))
-                #cv2.imshow("record image", tv_resized_image)
-                if THIRD:
-                    third_resized = cv2.resize(third_img_array, (third_img_shape[1] // 2, third_img_shape[0] // 2))
-                    cv2.imshow("third camera", third_resized)
+                cv2.imshow("record image", tv_resized_image)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     running = False
@@ -290,13 +266,16 @@ if __name__ == '__main__':
                 elif not flag: #key == ord('s'):
                     should_toggle_recording = True
                     flag = True
+                    
                 elif key == ord('a'):
                     if args.sim:
                         publish_reset_category(2, reset_pose_publisher)
-
+            
+            logger_mp.info("debug")
             if args.record and should_toggle_recording:
                 should_toggle_recording = False
                 if not is_recording:
+                    logger_mp.info("not is_recording..............................")
                     if recorder.create_episode():
                         is_recording = True
                     else:
@@ -400,8 +379,6 @@ if __name__ == '__main__':
                 # wrist image
                 if WRIST:
                     current_wrist_image = wrist_img_array.copy()
-                if THIRD:
-                    current_third_image = third_img_array.copy()
                 # arm state and action
                 #left_arm_state = current_lr_arm_q[:7]
                 #right_arm_state = current_lr_arm_q[-7:]
@@ -410,7 +387,6 @@ if __name__ == '__main__':
                 if is_recording:
                     logger_mp.debug("is_recording")
                     colors = {}
-                    third_images = {}
                     depths = {}
                     if BINOCULAR:
                         colors[f"color_{0}"] = current_tv_image[:, :tv_img_shape[1] // 2]
@@ -424,11 +400,6 @@ if __name__ == '__main__':
                             colors[f"color_{1}"] = current_wrist_image[:, :wrist_img_shape[1] // 2]
                             colors[f"color_{2}"] = current_wrist_image[:, wrist_img_shape[1] // 2:]
 
-                    if THIRD:
-                        third_images[f"third_{0}"] = current_third_image
-                    else:
-                        third_image = None
-  
                     states = {
                         "left_arm": {
                             #"qpos": left_arm_state.tolist(),  # numpy.array -> list
@@ -487,22 +458,22 @@ if __name__ == '__main__':
                         carpet_tactiles['carpet_0'] = tactile_data
 
                         if not args.carpet_headless:
+                            logger_mp.debug("is_recording")
                             tactile_render = (tactile_data / args.carpet_sensitivity) * 255
                             tactile_render = np.clip(tactile_render, 0, 255)
                             tactile_render = cv2.resize(tactile_render.astype(np.uint8), (500, 500))
                             cv2.imshow("carpet_0", tactile_render)
                             cv2.waitKey(1)
-
                     else:
                         carpet_tactiles = None
   
                     if args.sim:
                         sim_state = sim_state_subscriber.read_data()
                         recorder.add_item(colors=colors, depths=depths, states=states, actions=actions,
-                                          carpet_tactiles=carpet_tactiles, sim_state=sim_state, third_images=third_images)
+                                          carpet_tactiles=carpet_tactiles, sim_state=sim_state)
                     else:
                         recorder.add_item(colors=colors, depths=depths, states=states, actions=actions,
-                                          carpet_tactiles=carpet_tactiles, third_images=third_images)
+                                          carpet_tactiles=carpet_tactiles)
 
             current_time = time.time()
             time_elapsed = current_time - start_time
@@ -513,7 +484,7 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logger_mp.info("KeyboardInterrupt, exiting program...")
     except Exception as e:
-        logger_mp.error(f"An error occurred: {e}")
+        logger_mp.info(f"An error occurred: {e}")
         logger_mp.info("Exiting program due to an error...")
     finally:
         #arm_ctrl.ctrl_dual_arm_go_home()
@@ -524,9 +495,6 @@ if __name__ == '__main__':
         if WRIST:
             wrist_img_shm.close()
             wrist_img_shm.unlink()
-        if THIRD:
-            third_img_shm.close()
-            third_img_shm.unlink()
         if args.record:
             recorder.close()
         listen_keyboard_thread.join()
