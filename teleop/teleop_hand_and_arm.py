@@ -38,6 +38,7 @@ def publish_reset_category(category: int, publisher):  # Scene Reset signal
     publisher.Write(msg)
     logger_mp.info(f"published reset category: {category}")
 
+num_tactile_per_hand = 1062 # add
 
 # state transition
 start_signal = False
@@ -96,14 +97,14 @@ if __name__ == '__main__':
         img_config = {
             'fps': 30,
             'head_camera_type': 'opencv',
-            'head_camera_image_shape': [480, 640],  # Head camera resolution
-            'head_camera_id_numbers': [0],
-            'wrist_camera_type': 'opencv',
-            'wrist_camera_image_shape': [480, 640],  # Wrist camera resolution
-            'wrist_camera_id_numbers': [2, 4],
+            'head_camera_image_shape': [480, 848],  # Head camera resolution
+            'head_camera_id_numbers': ['339222071291'],
+            #'wrist_camera_type': 'opencv',
+            #'wrist_camera_image_shape': [480, 640],  # Wrist camera resolution
+            #'wrist_camera_id_numbers': [2, 4],
             'third_camera_type': 'opencv',
             'third_camera_image_shape': [480, 640],  # Third camera resolution
-            'third_camera_id_numbers': [6],
+            'third_camera_id_numbers': ['239622301900'],
         }
     else:
         img_config = {
@@ -116,7 +117,7 @@ if __name__ == '__main__':
             #'wrist_camera_id_numbers': [2, 4],
             'third_camera_type': 'opencv',
             'third_camera_image_shape': [480, 640],  # Third camera resolution
-            'third_camera_id_numbers': ['39622301900'], # TODO: change the camera id
+            'third_camera_id_numbers': ['918512072592'], # TODO: change the camera id
         }
 
     # carpet tactile sensors
@@ -176,16 +177,15 @@ if __name__ == '__main__':
         wrist_img_array = np.ndarray(wrist_img_shape, dtype=np.uint8, buffer=wrist_img_shm.buf)
         img_client = ImageClient(tv_img_shape=tv_img_shape, tv_img_shm_name=tv_img_shm.name,
                                  wrist_img_shape=wrist_img_shape, wrist_img_shm_name=wrist_img_shm.name)
-    else:
-        img_client = ImageClient(tv_img_shape=tv_img_shape, tv_img_shm_name=tv_img_shm.name)
-
-    if THIRD and not args.sim:
-        third_img_shape = (img_config['third_camera_image_shape'][0], img_config['third_camera_image_shape'][1], 3)
+    elif THIRD and not args.sim:
+        third_img_shape = (img_config['third_camera_image_shape'][0], img_config['third_camera_image_shape'][1] * 2, 3)
         third_img_shm = shared_memory.SharedMemory(create=True, size=np.prod(third_img_shape) * np.uint8().itemsize)
         third_img_array = np.ndarray(third_img_shape, dtype=np.uint8, buffer=third_img_shm.buf)
         img_client = ImageClient(tv_img_shape=tv_img_shape, tv_img_shm_name=tv_img_shm.name,
                                  third_img_shape=third_img_shape, third_img_shm_name=third_img_shm.name)
-
+    else:
+        img_client = ImageClient(tv_img_shape=tv_img_shape, tv_img_shm_name=tv_img_shm.name)
+    
     image_receive_thread = threading.Thread(target=img_client.receive_process, daemon=True)
     image_receive_thread.daemon = True
     image_receive_thread.start()
@@ -232,9 +232,12 @@ if __name__ == '__main__':
         right_hand_pos_array = Array('d', 75, lock=True)  # [input]
         dual_hand_data_lock = Lock()
         dual_hand_state_array = Array('d', 12, lock=False)  # [output] current left, right hand state(12) data.
-        dual_hand_action_array = Array('d', 12, lock=False)  # [output] current left, right hand action(12) data.
-        hand_ctrl = Inspire_Controller(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock,
-                                       dual_hand_state_array, dual_hand_action_array)
+        dual_hand_action_array = Array('d', 36, lock=False)  # [output] current left, right hand action(12) data.
+        dual_hand_force_array = Array('d', 12, lock=False)
+        dual_hand_touch_array = Array('d', 1062 * 2, lock=False) # add
+        hand_ctrl = Inspire_Controller(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, 
+                                       dual_hand_state_array, dual_hand_action_array, dual_hand_touch_array,
+                                       dual_hand_force_array)
     elif args.ee == "brainco":
         left_hand_pos_array = Array('d', 75, lock=True)  # [input]
         right_hand_pos_array = Array('d', 75, lock=True)  # [input]
@@ -273,15 +276,17 @@ if __name__ == '__main__':
         while not start_signal:
             time.sleep(0.01)
         arm_ctrl.speed_gradual_max()
+        s_t = time.time()
         while running:
+            
             start_time = time.time()
 
             if not args.headless:
                 tv_resized_image = cv2.resize(tv_img_array, (tv_img_shape[1] // 2, tv_img_shape[0] // 2))
                 cv2.imshow("record image", tv_resized_image)
-                #if THIRD:
-                #    third_resized = cv2.resize(third_img_array, (third_img_shape[1] // 2, third_img_shape[0] // 2))
-                #    cv2.imshow("third camera", third_resized)
+                if THIRD:
+                    third_resized = cv2.resize(third_img_array, (third_img_shape[1] // 2, third_img_shape[0] // 2))
+                    cv2.imshow("third camera", third_resized)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     running = False
@@ -289,6 +294,7 @@ if __name__ == '__main__':
                         publish_reset_category(2, reset_pose_publisher)
                 elif key == ord('s'):
                     should_toggle_recording = True
+                    #s_time = time.time()
                 elif key == ord('a'):
                     if args.sim:
                         publish_reset_category(2, reset_pose_publisher)
@@ -325,12 +331,11 @@ if __name__ == '__main__':
             else:
                 pass
 
-                # high level control
+            # high level control
             if args.xr_mode == "controller" and args.motion:
                 # quit teleoperate
                 if tele_data.tele_state.right_aButton:
                     running = False
-                    stop_listening()
                 # command robot to enter damping mode. soft emergency stop function
                 if tele_data.tele_state.left_thumbstick_state and tele_data.tele_state.right_thumbstick_state:
                     sport_client.Damp()
@@ -338,7 +343,14 @@ if __name__ == '__main__':
                 sport_client.Move(-tele_data.tele_state.left_thumbstick_value[1] * 0.3,
                                   -tele_data.tele_state.left_thumbstick_value[0] * 0.3,
                                   -tele_data.tele_state.right_thumbstick_value[0] * 0.3)
-
+                logger_mp.info(f"{tele_data.tele_state}")
+                
+                if tele_data.tele_state.left_aButton:
+                    sport_client.StopMove()
+                
+                if tele_data.tele_state.right_bButton:
+                    sport_client.Squat2StandUp()
+                
             # get current robot state data.
             current_lr_arm_q = arm_ctrl.get_current_dual_arm_q()
             current_lr_arm_dq = arm_ctrl.get_current_dual_arm_dq()
@@ -380,14 +392,40 @@ if __name__ == '__main__':
                         current_body_action = [-tele_data.tele_state.left_thumbstick_value[1] * 0.3,
                                                -tele_data.tele_state.left_thumbstick_value[0] * 0.3,
                                                -tele_data.tele_state.right_thumbstick_value[0] * 0.3]
-                elif (args.ee == "inspire1" or args.ee == "brainco") and args.xr_mode == "hand":
+                elif args.ee == "inspire1" and args.xr_mode == 'hand':
                     with dual_hand_data_lock:
                         left_ee_state = dual_hand_state_array[:6]
                         right_ee_state = dual_hand_state_array[-6:]
+                        left_hand_force_state = dual_hand_force_array[:6]
+                        right_hand_force_state = dual_hand_force_array[-6:] 
                         left_hand_action = dual_hand_action_array[:6]
-                        right_hand_action = dual_hand_action_array[-6:]
+                        right_hand_action = dual_hand_action_array[6:12]
+                        left_hand_force_action = dual_hand_action_array[12:18]
+                        right_hand_force_action = dual_hand_action_array[18:24]
+                        left_hand_speed_action = dual_hand_action_array[24:30]
+                        right_hand_speed_action = dual_hand_action_array[30:36] 
+                        left_hand_touch = dual_hand_touch_array[:1062]
+                        right_hand_touch = dual_hand_touch_array[-1062:]
                         current_body_state = []
                         current_body_action = []
+                elif args.ee == 'inspire1' and args.xr_mode == 'controller':
+                     with dual_hand_data_lock:
+                        left_ee_state = dual_hand_state_array[:6]
+                        right_ee_state = dual_hand_state_array[-6:]
+                        left_hand_force_state = dual_hand_force_array[:6]
+                        right_hand_force_state = dual_hand_force_array[-6:] 
+                        left_hand_action = dual_hand_action_array[:6]
+                        right_hand_action = dual_hand_action_array[6:12]
+                        left_hand_force_action = dual_hand_action_array[12:18]
+                        right_hand_force_action = dual_hand_action_array[18:24]
+                        left_hand_speed_action = dual_hand_action_array[24:30]
+                        right_hand_speed_action = dual_hand_action_array[30:36] 
+                        left_hand_touch = dual_hand_touch_array[:1062]
+                        right_hand_touch = dual_hand_touch_array[-1062:]
+                        current_body_state = arm_ctrl.get_current_motor_q().tolist()
+                        current_body_action = [-tele_data.tele_state.left_thumbstick_value[1]  * 0.1,
+                                                -tele_data.tele_state.left_thumbstick_value[0]  * 0.1,
+                                                -tele_data.tele_state.right_thumbstick_value[0] * 0.1]
                 else:
                     left_ee_state = []
                     right_ee_state = []
@@ -395,6 +433,7 @@ if __name__ == '__main__':
                     right_hand_action = []
                     current_body_state = []
                     current_body_action = []
+
                 # head image
                 current_tv_image = tv_img_array.copy()
                 # wrist image
@@ -403,10 +442,15 @@ if __name__ == '__main__':
                 if THIRD:
                     current_third_image = third_img_array.copy()
                 # arm state and action
-                left_arm_state = current_lr_arm_q[:7]
+                left_arm_state  = current_lr_arm_q[:7]
+                left_arm_dq_state = current_lr_arm_dq[:7]
                 right_arm_state = current_lr_arm_q[-7:]
+                right_arm_dq_state = current_lr_arm_dq[-7:]
                 left_arm_action = sol_q[:7]
+                left_arm_torque_action = sol_tauff[:7]
                 right_arm_action = sol_q[-7:]
+                right_arm_torque_action = sol_tauff[-7:]
+
                 if is_recording:
                     colors = {}
                     depths = {}
@@ -418,32 +462,32 @@ if __name__ == '__main__':
                             colors[f"color_{3}"] = current_wrist_image[:, wrist_img_shape[1] // 2:]
                     else:
                         colors[f"color_{0}"] = current_tv_image
-                        if WRIST:
-                            colors[f"color_{1}"] = current_wrist_image[:, :wrist_img_shape[1] // 2]
-                            colors[f"color_{2}"] = current_wrist_image[:, wrist_img_shape[1] // 2:]
+                        #if WRIST:
+                        #    colors[f"color_{1}"] = current_wrist_image[:, :wrist_img_shape[1] // 2]
+                        #    colors[f"color_{2}"] = current_wrist_image[:, wrist_img_shape[1] // 2:]
                         if THIRD:
                             colors[f"color_{3}"] = current_third_image[:, third_img_shape[1] // 2:]
-                    
+                            #colors[f"color_{3}"] = current_third_image
                     states = {
                         "left_arm": {
                             "qpos": left_arm_state.tolist(),  # numpy.array -> list
-                            "qvel": [],
+                            "qvel": left_arm_dq_state.tolist(),  
                             "torque": [],
                         },
                         "right_arm": {
                             "qpos": right_arm_state.tolist(),
-                            "qvel": [],
+                            "qvel": right_arm_dq_state.tolist(),
                             "torque": [],
                         },
-                        "left_ee": {
+                        "left_hand": {
                             "qpos": left_ee_state,
                             "qvel": [],
-                            "torque": [],
+                            "torque": left_hand_force_state,
                         },
-                        "right_ee": {
+                        "right_hand": {
                             "qpos": right_ee_state,
                             "qvel": [],
-                            "torque": [],
+                            "torque": right_hand_force_state,
                         },
                         "body": {
                             "qpos": current_body_state,
@@ -453,28 +497,32 @@ if __name__ == '__main__':
                         "left_arm": {
                             "qpos": left_arm_action.tolist(),
                             "qvel": [],
-                            "torque": [],
+                            "torque": left_arm_torque_action.tolist(),   
                         },
                         "right_arm": {
                             "qpos": right_arm_action.tolist(),
                             "qvel": [],
-                            "torque": [],
+                            "torque": right_arm_torque_action.tolist(),
                         },
-                        "left_ee": {
+                        "left_hand": {
                             "qpos": left_hand_action,
-                            "qvel": [],
-                            "torque": [],
+                            "qvel": left_hand_speed_action,
+                            "torque": left_hand_force_action,
                         },
-                        "right_ee": {
+                        "right_hand": {
                             "qpos": right_hand_action,
-                            "qvel": [],
-                            "torque": [],
+                            "qvel": right_hand_speed_action,
+                            "torque": right_hand_force_action,
                         },
                         "body": {
                             "qpos": current_body_action,
                         },
                     }
-
+                    tactiles = {
+                        "left_tactile": left_hand_touch, 
+                        "right_tactile": right_hand_touch,
+                        }
+                    
                     if args.carpet_tactile:
                         carpet_tactiles = dict()
                         tactile_data = get_tactile_data()
@@ -483,7 +531,7 @@ if __name__ == '__main__':
                         if not args.carpet_headless:
                             tactile_render = (tactile_data / args.carpet_sensitivity) * 255
                             tactile_render = np.clip(tactile_render, 0, 255)
-                            tactile_render = cv2.resize(tactile_render.astype(np.uint8), (500, 500))
+                            tactile_render = cv2.resize(tactile_render.astype(np.uint8), (1000, 1000))
                             cv2.imshow("carpet_0", tactile_render)
                             cv2.waitKey(1)
                     else:
@@ -491,12 +539,12 @@ if __name__ == '__main__':
 
                     if args.sim:
                         sim_state = sim_state_subscriber.read_data()
-                        recorder.add_item(colors=colors, depths=depths, states=states, actions=actions,
-                                          carpet_tactiles=carpet_tactiles, sim_state=sim_state)
+                        recorder.add_item(colors=colors, depths=depths, states=states, actions=actions, 
+                                          tactiles=tactiles, carpet_tactiles=carpet_tactiles, sim_state=sim_state)
                     else:
-                        recorder.add_item(colors=colors, depths=depths, states=states, actions=actions,
-                                          carpet_tactiles=carpet_tactiles)
-
+                        recorder.add_item(colors=colors, depths=depths, states=states, actions=actions, 
+                                          tactiles=tactiles, carpet_tactiles=carpet_tactiles)
+            
             current_time = time.time()
             time_elapsed = current_time - start_time
             sleep_time = max(0, (1 / args.frequency) - time_elapsed)
