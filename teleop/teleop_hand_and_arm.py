@@ -37,7 +37,7 @@ mp.set_start_method('fork', force=True)
 
 # multi-camera (RealSense) helpers
 try:
-    import multi_camera as mc
+    import teleop.multi_camera as mc
 except Exception:
     mc = None
 
