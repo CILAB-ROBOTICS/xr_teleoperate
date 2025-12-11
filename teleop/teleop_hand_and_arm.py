@@ -35,6 +35,50 @@ from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_
 import multiprocessing as mp
 mp.set_start_method('fork', force=True)
 
+# multi-camera (RealSense) helpers
+try:
+    import teleop.multi_camera as mc
+except Exception:
+    mc = None
+
+
+def _select_realsense_serials():
+    if mc is None:
+        return []
+    serials = mc.list_realsense_serials()
+    if len(serials) == 0:
+        serials = ["SYNTH0", "SYNTH1", "SYNTH2"]
+    elif len(serials) == 1:
+        serials = [serials[0], "SYNTH1", "SYNTH2"]
+    elif len(serials) == 2:
+        serials = [serials[0], serials[1], "SYNTH2"]
+    else:
+        serials = serials[:3]
+    return serials
+
+
+def _init_realsense_manager():
+    if mc is None:
+        logger_mp.error("multi_camera module not available; RealSense streaming disabled.")
+        return None
+    serials = _select_realsense_serials()
+    specs = [
+        mc.RSSpec("wrist_left", serials[0], width=640, height=480, fps=30, need_depth=False),
+        mc.RSSpec("wrist_right", serials[1], width=640, height=480, fps=30, need_depth=False),
+        mc.RSSpec("front", serials[2], width=640, height=480, fps=30, need_depth=True),
+    ]
+    logger_mp.info(f"Initializing RealSense manager with serials: {serials}")
+    return mc.RSManager(specs)
+
+
+def _colorize_depth(depth_u16: np.ndarray):
+    if mc is None:
+        return None
+    dm = depth_u16.astype(np.float32) * mc.DEPTH_SCALE
+    dm = np.clip(dm, mc.DEPTH_MIN_M, mc.DEPTH_MAX_M)
+    norm = ((dm - mc.DEPTH_MIN_M) / (mc.DEPTH_MAX_M - mc.DEPTH_MIN_M) * 255.0).astype(np.uint8)
+    return cv2.applyColorMap(norm, cv2.COLORMAP_TURBO)
+
 
 def publish_reset_category(category: int, publisher):  # Scene Reset signal
     msg = String_(data=str(category))
@@ -44,7 +88,7 @@ def publish_reset_category(category: int, publisher):  # Scene Reset signal
 num_tactile_per_hand = 1062 # add
 
 # state transition
-start_signal = False
+start_signal = True
 running = True
 should_toggle_recording = False
 is_recording = False
@@ -62,6 +106,13 @@ def on_press(key):
         should_toggle_recording = True
     else:
         logger_mp.info(f"{key} was pressed, but no action is defined for this key.")
+
+
+listen_keyboard_thread = threading.Thread(target=listen_keyboard,
+                                          kwargs={"on_press": on_press, "until": None, "sequential": False, },
+                                          daemon=True)
+listen_keyboard_thread.start()
+
 
 
 class Dummy_ArmController:
@@ -112,6 +163,7 @@ if __name__ == '__main__':
     parser.add_argument('--sim', action='store_true', help='Enable isaac simulation mode')
     parser.add_argument('--carpet_tactile', action='store_true', help='Enable carpet tactile sensor data collection')
     parser.add_argument('--third_camera', action='store_true', help='Enable third camera (RealSense color via UVC)')
+    parser.add_argument('--realsense', action='store_true', help='Enable 3 RealSense cameras (front depth + wrists) logging')
 
     args = parser.parse_args()
     logger_mp.info(f"args: {args}")
@@ -158,6 +210,7 @@ if __name__ == '__main__':
         WRIST = False
 
     THIRD = bool(args.third_camera)
+    USE_RS = bool(args.realsense)
 
     if BINOCULAR and not (img_config['head_camera_image_shape'][1] / img_config['head_camera_image_shape'][
         0] > ASPECT_RATIO_THRESHOLD):
@@ -201,6 +254,8 @@ if __name__ == '__main__':
                                  img_shm_name=tv_img_shm.name,
                                  return_state_data=True, return_hand_rot_data=False)
     logger_mp.info("TeleVuer wrapper started.")
+
+    rs_manager = _init_realsense_manager() if USE_RS else None
 
     # arm
     if args.arm == "G1_29":
@@ -270,6 +325,19 @@ if __name__ == '__main__':
         while running:
 
             start_time = time.time()
+
+            rs_colors = {}
+            rs_depth = None
+            if USE_RS and rs_manager is not None:
+                if rs_manager.ready("wrist_left"):
+                    rs_colors["rs_wrist_left"] = rs_manager.get_rgb("wrist_left").copy()
+                if rs_manager.ready("wrist_right"):
+                    rs_colors["rs_wrist_right"] = rs_manager.get_rgb("wrist_right").copy()
+                if rs_manager.ready("front"):
+                    rs_colors["rs_front_rgb"] = rs_manager.get_rgb("front").copy()
+                    depth_frame = rs_manager.get_depth("front")
+                    if depth_frame is not None:
+                        rs_depth = _colorize_depth(depth_frame.copy())
 
             if not args.headless:
                 tv_resized_image = cv2.resize(tv_img_array, (tv_img_shape[1] // 2, tv_img_shape[0] // 2))
@@ -425,6 +493,9 @@ if __name__ == '__main__':
                         if THIRD:
                             colors[f"color_{3}"] = current_third_image[:, third_img_shape[1] // 2:]
                             #colors[f"color_{3}"] = current_third_image
+                    colors.update(rs_colors)
+                    if rs_depth is not None:
+                        depths["rs_front_depth"] = rs_depth
                     states = {
                         "left_arm": {
                             "qpos": left_arm_state.tolist(),  # numpy.array -> list
@@ -514,6 +585,8 @@ if __name__ == '__main__':
         if THIRD:
             third_img_shm.close()
             third_img_shm.unlink()
+        if rs_manager:
+            rs_manager.close()
         if args.record:
             recorder.close()
         # listen_keyboard_thread.join()

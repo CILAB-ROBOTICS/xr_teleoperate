@@ -162,11 +162,18 @@ class EpisodeWriter():
 
     def _process_item_data(self, item_data):
         idx = item_data['idx']
-        colors = item_data.get('colors', {})
-        depths = item_data.get('depths', {})
+        colors = item_data.get('colors', {}) or {}
+        depths = item_data.get('depths', {}) or {}
         audios = item_data.get('audios', {})
         carpet_tactiles = item_data.get('carpet_tactiles', {})
         carpet_tactiles_val = copy.deepcopy(carpet_tactiles)
+
+        if self.rerun_log:
+            colors_for_log = {k: v.copy() for k, v in colors.items()}
+            depths_for_log = {k: v.copy() for k, v in depths.items()}
+        else:
+            colors_for_log = {}
+            depths_for_log = {}
 
         # Save images
         if len(colors):
@@ -211,7 +218,15 @@ class EpisodeWriter():
         if self.rerun_log:
             curent_record_time = time.time()
             logger_mp.info(f"==> episode_id:{self.episode_id} item_id:{idx}  current_time:{curent_record_time}")
-            self.rerun_logger.log_item_data(item_data)
+            log_item = {
+                'idx': idx,
+                'colors': colors_for_log,
+                'depths': depths_for_log,
+                'states': item_data.get('states', {}),
+                'actions': item_data.get('actions', {}),
+                'tactile_vis': item_data.get('tactile_vis', {}),
+            }
+            self.rerun_logger.log_item_data(log_item)
 
     def save_episode(self):
         """

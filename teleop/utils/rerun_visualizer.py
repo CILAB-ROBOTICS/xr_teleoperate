@@ -2,9 +2,14 @@ import os
 import json
 import cv2
 import time
+import os
+import json
+
+import cv2
 import rerun as rr
 import rerun.blueprint as rrb
 from datetime import datetime
+
 os.environ["RUST_LOG"] = "error"
 
 class RerunEpisodeReader:
@@ -146,9 +151,17 @@ class RerunLogger:
             origin = f"{self.prefix}carpet_0",
         ))
 
+        camera_views = [
+            rrb.Spatial2DView(origin = f"{self.prefix}colors/rs_wrist_left", name="wrist_left"),
+            rrb.Spatial2DView(origin = f"{self.prefix}colors/rs_wrist_right", name="wrist_right"),
+            rrb.Spatial2DView(origin = f"{self.prefix}colors/rs_front_rgb", name="front_rgb"),
+            rrb.Spatial2DView(origin = f"{self.prefix}depths/rs_front_depth", name="front_depth"),
+        ]
+        views.append(rrb.Grid(contents = camera_views, grid_columns=2, column_shares=[1, 1], row_shares=[1, 1]))
+
 
         grid = rrb.Grid(contents = views,
-                        grid_columns=2,               
+                        grid_columns=2,
                         column_shares=[1, 1],
                         row_shares=[1, 1], 
         )
@@ -176,18 +189,18 @@ class RerunLogger:
                 for idx, val in enumerate(values):
                     rr.log(f"{self.prefix}{part}/actions/qpos/{idx}", rr.Scalar(val))
 
-        # # Log colors (images)
-        # colors = item_data.get('colors', {}) or {}
-        # for color_key, color_val in colors.items():
-        #     if color_val is not None:
-        #         rr.log(f"{self.prefix}colors/{color_key}", rr.Image(color_val))
+        colors = item_data.get('colors', {}) or {}
+        for color_key, color_val in colors.items():
+            if color_val is not None:
+                rr.log(f"{self.prefix}colors/{color_key}", rr.Image(color_val))
 
-        # # Log depths (images)
-        # depths = item_data.get('depths', {}) or {}
-        # for depth_key, depth_val in depths.items():
-        #     if depth_val is not None:
-        #         # rr.log(f"{self.prefix}depths/{depth_key}", rr.Image(depth_val))
-        #         pass # Handle depth if needed
+        depths = item_data.get('depths', {}) or {}
+        for depth_key, depth_val in depths.items():
+            if depth_val is not None:
+                depth_rgb = depth_val
+                if len(depth_rgb.shape) == 3 and depth_rgb.shape[2] == 3:
+                    depth_rgb = cv2.cvtColor(depth_rgb, cv2.COLOR_BGR2RGB)
+                rr.log(f"{self.prefix}depths/{depth_key}", rr.Image(depth_rgb))
 
         # # Log tactile if needed
         tactiles = item_data.get('tactile_vis', {}) or {}
